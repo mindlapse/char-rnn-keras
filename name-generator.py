@@ -4,6 +4,8 @@ from keras.layers import LSTM, Dropout, TimeDistributed, Dense, Activation
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 import numpy as np
+import string
+
 
 class NameGenerator(object):
 
@@ -15,6 +17,8 @@ class NameGenerator(object):
         self.null_index = 0
         self.num_chars = len(self.char_map)
         self.max_len = 32
+        self.all_names = set()
+        self.alphas = set(string.ascii_lowercase)
 
 
     def create_training_set(self):
@@ -27,6 +31,7 @@ class NameGenerator(object):
             y_chars = []
             for line in lines:
                 line = line.strip()
+                self.all_names.add(line)
                 X_chars += [[self.char_map.index(c) for c in line]]
                 y_chars += [[self.char_map.index(c) for c in line[1:]] + [0]]
 
@@ -69,32 +74,47 @@ class NameGenerator(object):
         print(self.model.summary())
 
 
-    def sample_output(self, times=5):
-        for i in range(times):
-            str = np.random.choice(self.char_map)
+    def remove_nulls(self, samples):
+        for row in range(len(samples)):
+            null_idx = samples[row].index("_") if "_" in samples[row] else -1
+            if null_idx > 0:
+                samples[row] = samples[row][0:null_idx]
+            else:
+                samples[row] = None
 
-            for i in range(self.max_len):
-                input = np.zeros((1, len(str), self.num_chars))
 
-                for t, char in enumerate(str):
-                    input[0, t, self.char_map.index(char)] = 1
+    def get_samples(self, batch_size):
+        samples = np.random.choice(list(self.alphas), batch_size).tolist()
 
-                probs = self.model.predict(input, verbose=0)
-                # print(np.array(probs).shape)
-                # print(probs[0][i][:4])
-                # print(np.random.multinomial(1, probs[0][i] / (1+1e-5)))
+        for i in range(self.max_len):
+            input = np.zeros((batch_size, i+1, self.num_chars))
 
-                str += self.char_map[np.argmax(np.random.multinomial(1, probs[0][i] / (1 + 1e-5)))]
+            for row in range(batch_size):
+                for c, char in enumerate(samples[row]):
+                    input[row, c, self.char_map.index(char)] = 1
 
-            # Sample from the probability distribution
-            print(str)
+            probs = self.model.predict(input, verbose=0)
+
+            for row in range(batch_size):
+                letter = self.char_map[np.argmax(np.random.multinomial(1, probs[row][i] / (1 + 1e-5)))]
+                samples[row] += letter
+                # print(str(row) + " " + str(type(samples)) + " " + letter)
+
+        self.remove_nulls(samples)
+
+        results = set()
+        for sample in samples:
+            if sample is not None and sample not in self.all_names:
+                results.add(sample)
+
+        return results
 
     def train_model(self, epochs=50, batch_size=128):
 
         for epoch in range(epochs):
             print('-' * 10 + ' Iteration: {} '.format(epoch) + '-' * 10)
 
-
+            [print(sample) for sample in self.get_samples(batch_size=32)]
 
             history = self.model.fit(self.X, self.y, batch_size=batch_size, epochs=1, verbose=1)
             print('loss is {}'.format(history.history['loss'][0]))
@@ -104,11 +124,14 @@ if __name__ == "__main__":
 
     filename = 'data/names.txt.cleaned.txt'
 
+    # from tensorflow.python.client import device_lib
+    #
+    # print(device_lib.list_local_devices())
 
     ng = NameGenerator(filename, max_len=32)
 
     ng.create_training_set()
-    ng.create_model( hidden_units=512, dropout=.3 )
+    ng.create_model( hidden_units=1024, dropout=.3 )
     ng.compile_model( optimizer='rmsprop' )
-    ng.train_model( epochs=5000, batch_size=10 )
+    ng.train_model( epochs=5000, batch_size=256 )
 
